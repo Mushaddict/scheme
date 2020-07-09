@@ -1,0 +1,178 @@
+;#lang errortrace racket
+#lang racket
+#|
+    ===> PLEASE DO NOT DISTRIBUTE THE SOLUTIONS PUBLICLY <===
+
+   We ask that solutions be distributed only locally -- on paper, on a
+   password-protected webpage, etc.
+
+   Students are required to adhere to the University Policy on Academic
+   Standards and Cheating, to the University Statement on Plagiarism and the
+   Documentation of Written Work, and to the Code of Student Conduct as
+   delineated in the catalog of Undergraduate Programs. The Code is available
+   online at:
+
+   https://www.umb.edu/life_on_campus/dean_of_students/student_conduct
+
+|#
+(require "hw7-util.rkt")
+(require rackunit)
+(require racket/match)
+(provide (all-defined-out))
+
+
+(define/contract (env-put env var val)
+  (-> handle? d:variable? d:value? eff-op?)
+   (eff-op (lambda (m) (eff (environ-put m env var val) (d:void)))))
+
+(define/contract (env-push env var val)
+  (-> handle? d:variable? d:value? eff-op?)
+  (eff-op (lambda (m) (environ-push m env var val))))
+
+(define/contract (env-get env var)
+  (-> handle? d:variable? eff-op?)
+  (eff-op (lambda (m) (eff m (environ-get m env var))))
+  )
+
+(define (my-apply-func exp)
+   (match exp [(d:apply ef ea) ef]))
+
+(define (my-apply-args exp)
+   (match exp [(d:apply ef ea) ea]))
+
+(define (my-closure-env exp)
+   (match exp [(d:closure env decl) env]))
+
+(define (my-closure-decl exp)
+   (match exp [(d:closure env decl) decl]))
+
+(define (my-lambda-params exp)
+   (match exp [(d:lambda xs t) xs]))
+
+(define (my-lambda-body exp)
+   (match exp [(d:lambda xs t) t]))
+
+(define (my-define-var exp)
+   (match exp [ (d:define var body) var]))
+
+(define (my-define-body exp)
+   (match exp [ (d:define var body) body]))
+
+(define (my-seq-fst exp)
+   (match exp [ (d:seq fst snd) fst]))
+
+(define (my-seq-snd exp)
+   (match exp [ (d:seq fst snd) snd]))
+
+(define/contract (d:eval-exp env exp)
+  (-> handle? d:expression? eff-op?)
+  (eff-op (lambda (mem)
+    (cond
+    [(d:value? exp) (eff mem exp)]
+    [(d:variable? exp) (eff mem (environ-get mem env exp))]
+    [(d:apply? exp)
+      (define ef (my-apply-func exp))
+      (define ea (car (my-apply-args exp)))
+      (define sr (eff-run ((d:eval-exp-impl) env ef) mem))
+      (define memm (eff-state sr))
+      (define clos (eff-result sr))
+      (define envf (my-closure-env clos))
+      (define lmda (my-closure-decl clos))
+      (define x (car (my-lambda-params lmda)))
+      (define tb (my-lambda-body lmda))
+      (define emb0 (eff-run ((d:eval-exp-impl)  env ea) memm))
+      (define va (eff-result emb0))
+      (define mem2 (eff-state emb0))
+      (define emb (environ-push mem2 envf x va))
+      (define memb (eff-state emb))
+      (define envb (eff-result emb))
+      (define emb2 (eff-run ((d:eval-term-impl) envb tb) memb))
+      (define vb (eff-result emb2))
+      (define membb (eff-state emb2))
+      (eff membb vb)]
+    [(d:lambda? exp)
+     (eff mem (d:closure env exp))]
+    [else (print exp)]
+    )
+  ))
+)
+
+(define/contract (d:eval-term env term)
+  (-> handle? d:term? eff-op?)
+  (eff-op (lambda (mem)
+    (cond
+    [(d:expression? term) (eff-run ((d:eval-exp-impl) env term) mem)]
+    [(d:define? term)
+
+     (let ([v (eff-result (eff-run ((d:eval-exp-impl) env (my-define-body term)) mem) )])
+       (eff (environ-put mem env (my-define-var term) v) (d:void))
+       )
+     ]
+    [(d:seq? term)
+     (define sr (eff-run ((d:eval-term-impl) env (my-seq-fst term)) mem))
+     (define memm (eff-state sr))
+     (define envv (eff-result sr))
+     (define sr2 (eff-run ((d:eval-term-impl) env (my-seq-snd term)) memm))
+     (define memmm (eff-state sr2))
+     (define result (eff-result sr2))
+     (eff memmm result)]
+    [else (print term)]
+    )
+  ))
+)
+
+;; Use this dynamic parameter in d:eval-term for improved testing (see Lecture 31)
+(define d:eval-exp-impl (make-parameter d:eval-exp))
+;; Use this dynamic parameter in d:eval-exp for improved testing (see Lecture 31)
+(define d:eval-term-impl (make-parameter d:eval-term))
+
+;; Parameter body *must* be a curried term already
+(define/contract (break-lambda args body)
+  (-> (listof d:variable?) d:term? d:lambda?)
+  (if (equal? (length args) 0)
+      (d:lambda (list (d:variable (string->symbol "_"))) body)
+      (if (equal? (length args) 1)
+          (d:lambda args body)
+          (d:lambda (list (car args)) (break-lambda (cdr args) body) )
+      )
+  )
+)
+
+;; ef is a curried expression and args is a list of curried expressions
+(define/contract (break-apply ef args)
+  (-> d:expression? (listof d:expression?) d:expression?)
+  (if (null? args) (d:apply ef (list (d:void)))
+      ( if (equal? (length args) 1)
+           (d:apply ef args)
+           (break-apply (d:apply ef (list (car args)) ) (cdr args) )
+      )
+  )
+)
+
+;; Use this dynamic parameter in d:curry for improved testing (see Lecture 31)
+(define break-lambda-impl (make-parameter break-lambda))
+;; Use this dynamic parameter in d:curry for improved testing (see Lecture 31)
+(define break-apply-impl (make-parameter break-apply))
+
+(define/contract (d:curry term)
+  (-> d:term? d:term?)
+  ;(print term)
+  (match term
+    [(d:apply ef ea) ((break-apply-impl) ef ea)]
+    [(d:lambda xs t) ((break-lambda-impl) xs t)]
+  )
+)
+
+(define-check (curry-exp? given expected)
+  (check-equal? (d:quote1 (d:curry (d:parse1 given))) expected))
+
+(define-check (curry-term? given expected)
+  (check-equal? (d:quote (d:curry (d:parse given))) expected))
+
+(curry-exp? '(foo) '(foo (void)))
+(curry-exp? '(foo 1 2 3) '(((foo 1) 2) 3))
+(curry-exp? '(if #t 1 2) '(((if #t) 1) 2))
+(curry-exp? '(lambda (x y z) x) '(lambda (x) (lambda (y) (lambda (z) x))))
+(curry-exp? '(lambda () x) '(lambda (_) x))
+
+

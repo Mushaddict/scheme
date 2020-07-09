@@ -1,0 +1,13 @@
+3. Distinguish the variable binding semantics of Language λD from Racket. Give an example of a program that behaves differently in λD and in Racket. 
+Answer:
+λD is dynamically scoped,  Racket is lexically scoped.
+Exmaple:
+(let (x 5)
+(let (f (lambda (y) (+ x y))
+(let (x 0) 
+(f 6)
+)))
+In Racket, it is evaluated to 11.
+In λD, it is evaluated to 6.
+
+

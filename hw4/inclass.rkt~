@@ -1,0 +1,4 @@
+#lang racket
+(require "hw4-util.rkt")
+(define E0 (hash))
+(define (E1 (hash-set E0 (e:variable 'x) (e:number 10))))
